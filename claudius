@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 import yaml
 import sys
 import platform
-import readline
+import json
+import datetime
 
 # Define configuration paths
 CONFIG_DIR = os.path.expanduser("~/.config/claudius")
@@ -35,10 +36,12 @@ class ClaudeTerminal:
         self.setup_client()
         self.conversation = []
         self.system_prompt = self.config['system_prompt']
+        self.conversation_title = None
+        self.current_conversation_file = None
 
-        # Set up readline
-        readline.parse_and_bind('set editing-mode emacs')
-        readline.parse_and_bind('"\\C-j": accept-line')
+        # Set up conversation logging
+        self.logs_dir = os.path.expanduser("~/.config/claudius/conversations")
+        os.makedirs(self.logs_dir, exist_ok=True)
 
     def load_config(self):
         try:
@@ -136,7 +139,7 @@ class ClaudeTerminal:
 
     def get_multiline_input(self):
         lines = []
-        self.console.print(f"\n[bold {self.config['app']['theme']['user_prompt']}]You (Press Ctrl+J to send)[/]")
+        self.console.print(f"\n[bold {self.config['app']['theme']['user_prompt']}]You (Press Enter twice to send)[/]")
 
         while True:
             try:
@@ -248,19 +251,156 @@ class ClaudeTerminal:
                 self.display_code_block(code, language)
                 current_line += code_lines + 5  # Add some space for the code block formatting
 
+    def save_conversation(self):
+        if not self.conversation:
+            return  # Don't save empty conversations
+            
+        # Generate a unique filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        title = self.conversation_title or "Untitled"
+        safe_title = "".join([c if c.isalnum() else "_" for c in title]).lower()
+        filename = f"{timestamp}_{safe_title}.json"
+        file_path = os.path.join(self.logs_dir, filename)
+        
+        # Save the conversation to a file
+        conversation_data = {
+            "title": self.conversation_title or "Untitled",
+            "timestamp": timestamp,
+            "system_prompt": self.system_prompt,
+            "messages": self.conversation
+        }
+        
+        with open(file_path, 'w') as f:
+            json.dump(conversation_data, f, indent=2)
+            
+        self.current_conversation_file = file_path
+        return file_path
+        
+    def list_conversations(self):
+        conversations = []
+        for filename in sorted(os.listdir(self.logs_dir), reverse=True):
+            if filename.endswith('.json'):
+                file_path = os.path.join(self.logs_dir, filename)
+                try:
+                    with open(file_path, 'r') as f:
+                        data = json.load(f)
+                        conversations.append({
+                            "file_path": file_path,
+                            "title": data.get("title", "Untitled"),
+                            "timestamp": data.get("timestamp", "Unknown"),
+                            "preview": data.get("messages", [])[0].get("content", "")[:50] + "..." if data.get("messages") else ""
+                        })
+                except Exception as e:
+                    self.console.print(f"[red]Error loading {filename}: {str(e)}[/red]")
+        
+        return conversations
+        
+    def load_conversation(self, file_path):
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                self.conversation = data.get("messages", [])
+                self.system_prompt = data.get("system_prompt", self.config['system_prompt'])
+                self.conversation_title = data.get("title", "Untitled")
+                self.current_conversation_file = file_path
+                return True
+        except Exception as e:
+            self.console.print(f"[red]Error loading conversation: {str(e)}[/red]")
+            return False
+            
+    def prompt_for_conversation_title(self, default_title=None):
+        if not default_title and self.conversation:
+            # Try to generate a title from the first user message
+            first_message = next((m["content"] for m in self.conversation if m["role"] == "user"), "")
+            default_title = first_message[:30] + "..." if len(first_message) > 30 else first_message
+            
+        title = Prompt.ask(
+            "[yellow]Enter a title for this conversation[/]", 
+            default=default_title or "Untitled"
+        )
+        self.conversation_title = title
+        
+    def show_conversation_selector(self):
+        conversations = self.list_conversations()
+        if not conversations:
+            self.console.print("[yellow]No saved conversations found[/yellow]")
+            return None
+            
+        self.console.print("[bold]Select a conversation to continue:[/bold]")
+        for i, conv in enumerate(conversations):
+            date_str = datetime.datetime.strptime(conv["timestamp"], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+            self.console.print(f"[bold]{i+1}.[/bold] {conv['title']} ({date_str})")
+            self.console.print(f"   {conv['preview']}")
+            
+        self.console.print(f"[bold]0.[/bold] Start a new conversation")
+        
+        choice = Prompt.ask(
+            "[yellow]Enter your choice[/yellow]", 
+            default="0",
+            choices=[str(i) for i in range(len(conversations) + 1)]
+        )
+        
+        if choice == "0":
+            return None
+        else:
+            return conversations[int(choice) - 1]["file_path"]
+
     def start(self):
         self.console.print(f"[bold {self.config['app']['theme']['assistant_name']}]Welcome to Claude Terminal![/]")
         self.console.print("Commands:")
         self.console.print("- Type 'exit' on an empty line to quit")
-        self.console.print("- Press Ctrl+J to send message")
-        self.console.print("- Or enter two empty lines to send message\n")
+        self.console.print("- Type 'load' on an empty line to load a previous conversation") 
+        self.console.print("- Enter two empty lines to send message\n")
+        
+        # Ask if user wants to continue a previous conversation
+        self.console.print("[bold yellow]Would you like to continue a previous conversation? (y/n)[/bold yellow]")
+        if input().lower().startswith('y'):
+            conv_path = self.show_conversation_selector()
+            if conv_path:
+                self.load_conversation(conv_path)
+                self.console.print(f"[green]Loaded conversation: {self.conversation_title}[/green]")
+                
+                # Print the conversation history
+                for msg in self.conversation:
+                    if msg["role"] == "user":
+                        self.console.print(f"\n[bold {self.config['app']['theme']['user_prompt']}]You[/]")
+                        self.console.print(msg["content"])
+                    elif msg["role"] == "assistant":
+                        self.console.print(f"\n[bold {self.config['app']['theme']['assistant_name']}]Claude[/]")
+                        self.parse_and_display_response(msg["content"])
 
         while True:
             question = self.get_multiline_input()
 
-            if question.lower().strip() == 'exit':
+            question_lower = question.lower().strip()
+            if question_lower == 'exit':
+                # Save the conversation before exiting
+                if self.conversation and not self.current_conversation_file:
+                    self.console.print("[yellow]Save this conversation before exiting? (y/n)[/yellow]")
+                    if input().lower().startswith('y'):
+                        self.prompt_for_conversation_title()
+                        file_path = self.save_conversation()
+                        if file_path:
+                            self.console.print(f"[green]Conversation saved to {os.path.basename(file_path)}[/green]")
+                
                 self.console.print("[yellow]Goodbye![/yellow]")
                 break
+                
+            elif question_lower == 'load':
+                conv_path = self.show_conversation_selector()
+                if conv_path:
+                    self.load_conversation(conv_path)
+                    self.console.print(f"[green]Loaded conversation: {self.conversation_title}[/green]")
+                    
+                    # Print the conversation history
+                    for msg in self.conversation:
+                        if msg["role"] == "user":
+                            self.console.print(f"\n[bold {self.config['app']['theme']['user_prompt']}]You[/]")
+                            self.console.print(msg["content"])
+                        elif msg["role"] == "assistant":
+                            self.console.print(f"\n[bold {self.config['app']['theme']['assistant_name']}]Claude[/]")
+                            self.parse_and_display_response(msg["content"])
+                continue
 
             try:
                 self.console.print(f"\n[bold {self.config['app']['theme']['assistant_name']}]Claude")
@@ -282,6 +422,18 @@ class ClaudeTerminal:
                         "role": "assistant",
                         "content": response.content[0].text
                     })
+                    
+                # If this is the first message in a new conversation, prompt for title
+                if len(self.conversation) == 2 and not self.conversation_title:
+                    self.console.print("[yellow]Would you like to save this conversation? (y/n)[/yellow]")
+                    if input().lower().startswith('y'):
+                        self.prompt_for_conversation_title()
+                        file_path = self.save_conversation()
+                        if file_path:
+                            self.console.print(f"[green]Conversation saved as: {self.conversation_title}[/green]")
+                # For existing conversations, update the saved file
+                elif self.current_conversation_file and len(self.conversation) > 2:
+                    self.save_conversation()
 
                 # Display response without cursor positioning (fixed compatibility issue)
                 self.parse_and_display_response(response.content[0].text)
