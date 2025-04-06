@@ -374,14 +374,19 @@ class ClaudeTerminal:
 
             question_lower = question.lower().strip()
             if question_lower == 'exit':
-                # Save the conversation before exiting
+                # Automatically save the conversation before exiting if it's not empty
                 if self.conversation and not self.current_conversation_file:
-                    self.console.print("[yellow]Save this conversation before exiting? (y/n)[/yellow]")
-                    if input().lower().startswith('y'):
-                        self.prompt_for_conversation_title()
-                        file_path = self.save_conversation()
-                        if file_path:
-                            self.console.print(f"[green]Conversation saved to {os.path.basename(file_path)}[/green]")
+                    # Auto-generate title from first message
+                    first_message = next((m["content"] for m in self.conversation if m["role"] == "user"), "")
+                    words = first_message.split()
+                    title = " ".join(words[:10])
+                    if len(words) > 10:
+                        title += "..."
+                    self.conversation_title = title
+                    
+                    file_path = self.save_conversation()
+                    if file_path:
+                        self.console.print(f"[green]Conversation saved[/green]")
                 
                 self.console.print("[yellow]Goodbye![/yellow]")
                 break
@@ -423,14 +428,20 @@ class ClaudeTerminal:
                         "content": response.content[0].text
                     })
                     
-                # If this is the first message in a new conversation, prompt for title
+                # Automatically save after first message exchange
                 if len(self.conversation) == 2 and not self.conversation_title:
-                    self.console.print("[yellow]Would you like to save this conversation? (y/n)[/yellow]")
-                    if input().lower().startswith('y'):
-                        self.prompt_for_conversation_title()
-                        file_path = self.save_conversation()
-                        if file_path:
-                            self.console.print(f"[green]Conversation saved as: {self.conversation_title}[/green]")
+                    # Auto-generate title from first 10 words of user's first message
+                    first_message = self.conversation[0]["content"]
+                    words = first_message.split()
+                    title = " ".join(words[:10])
+                    if len(words) > 10:
+                        title += "..."
+                    self.conversation_title = title
+                    
+                    # Save the conversation
+                    file_path = self.save_conversation()
+                    if file_path:
+                        self.console.print(f"[green]Conversation saved[/green]")
                 # For existing conversations, update the saved file
                 elif self.current_conversation_file and len(self.conversation) > 2:
                     self.save_conversation()
