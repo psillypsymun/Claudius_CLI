@@ -38,6 +38,7 @@ class ClaudeTerminal:
         self.system_prompt = self.config['system_prompt']
         self.conversation_title = None
         self.current_conversation_file = None
+        self.conversation_created = None
 
         # Set up conversation logging
         self.logs_dir = os.path.expanduser("~/.config/claudius/conversations")
@@ -254,26 +255,44 @@ class ClaudeTerminal:
     def save_conversation(self):
         if not self.conversation:
             return  # Don't save empty conversations
+        
+        # If we're continuing an existing conversation, update that file
+        if self.current_conversation_file:
+            file_path = self.current_conversation_file
             
-        # Generate a unique filename with timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        title = self.conversation_title or "Untitled"
-        safe_title = "".join([c if c.isalnum() else "_" for c in title]).lower()
-        filename = f"{timestamp}_{safe_title}.json"
-        file_path = os.path.join(self.logs_dir, filename)
+            # Update the existing file with current conversation data
+            conversation_data = {
+                "title": self.conversation_title or "Untitled",
+                "last_updated": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "created": self.conversation_created,  # Preserve original creation timestamp
+                "system_prompt": self.system_prompt,
+                "messages": self.conversation
+            }
+        else:
+            # Generate a unique filename with timestamp for new conversation
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.conversation_created = timestamp  # Store creation time
+            
+            title = self.conversation_title or "Untitled"
+            safe_title = "".join([c if c.isalnum() else "_" for c in title]).lower()
+            filename = f"{timestamp}_{safe_title}.json"
+            file_path = os.path.join(self.logs_dir, filename)
+            
+            # Save the new conversation to a file
+            conversation_data = {
+                "title": self.conversation_title or "Untitled",
+                "created": timestamp,
+                "last_updated": timestamp,
+                "system_prompt": self.system_prompt,
+                "messages": self.conversation
+            }
+            
+            self.current_conversation_file = file_path
         
-        # Save the conversation to a file
-        conversation_data = {
-            "title": self.conversation_title or "Untitled",
-            "timestamp": timestamp,
-            "system_prompt": self.system_prompt,
-            "messages": self.conversation
-        }
-        
+        # Write the data to file
         with open(file_path, 'w') as f:
             json.dump(conversation_data, f, indent=2)
             
-        self.current_conversation_file = file_path
         return file_path
         
     def list_conversations(self):
@@ -284,11 +303,23 @@ class ClaudeTerminal:
                 try:
                     with open(file_path, 'r') as f:
                         data = json.load(f)
+                        # Get the first user message for the preview
+                        preview = ""
+                        messages = data.get("messages", [])
+                        for msg in messages:
+                            if msg.get("role") == "user":
+                                preview = msg.get("content", "")[:50] + "..." if len(msg.get("content", "")) > 50 else msg.get("content", "")
+                                break
+                                
+                        # Use last_updated if available, otherwise fall back to created
+                        timestamp = data.get("last_updated", data.get("created", "Unknown"))
+                        
                         conversations.append({
                             "file_path": file_path,
                             "title": data.get("title", "Untitled"),
-                            "timestamp": data.get("timestamp", "Unknown"),
-                            "preview": data.get("messages", [])[0].get("content", "")[:50] + "..." if data.get("messages") else ""
+                            "timestamp": timestamp,
+                            "preview": preview,
+                            "message_count": len(messages) // 2  # Rough estimate of Q&A pairs
                         })
                 except Exception as e:
                     self.console.print(f"[red]Error loading {filename}: {str(e)}[/red]")
@@ -302,6 +333,7 @@ class ClaudeTerminal:
                 self.conversation = data.get("messages", [])
                 self.system_prompt = data.get("system_prompt", self.config['system_prompt'])
                 self.conversation_title = data.get("title", "Untitled")
+                self.conversation_created = data.get("created", datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
                 self.current_conversation_file = file_path
                 return True
         except Exception as e:
@@ -328,9 +360,20 @@ class ClaudeTerminal:
             
         self.console.print("[bold]Select a conversation to continue:[/bold]")
         for i, conv in enumerate(conversations):
-            date_str = datetime.datetime.strptime(conv["timestamp"], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
-            self.console.print(f"[bold]{i+1}.[/bold] {conv['title']} ({date_str})")
-            self.console.print(f"   {conv['preview']}")
+            try:
+                # Format the date nicely
+                date_str = datetime.datetime.strptime(conv["timestamp"], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
+                
+                # Show conversation details with message count
+                msg_count = conv.get("message_count", 0)
+                msg_text = f"{msg_count} message{'s' if msg_count != 1 else ''}"
+                
+                self.console.print(f"[bold]{i+1}.[/bold] {conv['title']} - {date_str} ({msg_text})")
+                self.console.print(f"   {conv['preview']}")
+            except Exception:
+                # Fallback if date parsing fails
+                self.console.print(f"[bold]{i+1}.[/bold] {conv['title']}")
+                self.console.print(f"   {conv['preview']}")
             
         self.console.print(f"[bold]0.[/bold] Start a new conversation")
         
