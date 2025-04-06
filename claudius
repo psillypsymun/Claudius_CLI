@@ -400,8 +400,16 @@ class ClaudeTerminal:
         if input().lower().startswith('y'):
             conv_path = self.show_conversation_selector()
             if conv_path:
+                # Clear the screen before loading conversation history
+                clear_screen()
+                
                 self.load_conversation(conv_path)
+                self.console.print(f"[bold {self.config['app']['theme']['assistant_name']}]Welcome to Claude Terminal![/]")
                 self.console.print(f"[green]Loaded conversation: {self.conversation_title}[/green]")
+                self.console.print("Commands:")
+                self.console.print("- Type 'exit' on an empty line to quit")
+                self.console.print("- Type 'load' on an empty line to load a previous conversation") 
+                self.console.print("- Enter two empty lines to send message\n")
                 
                 # Print the conversation history
                 for msg in self.conversation:
@@ -437,8 +445,16 @@ class ClaudeTerminal:
             elif question_lower == 'load':
                 conv_path = self.show_conversation_selector()
                 if conv_path:
+                    # Clear the screen before loading conversation history
+                    clear_screen()
+                    
                     self.load_conversation(conv_path)
+                    self.console.print(f"[bold {self.config['app']['theme']['assistant_name']}]Welcome to Claude Terminal![/]")
                     self.console.print(f"[green]Loaded conversation: {self.conversation_title}[/green]")
+                    self.console.print("Commands:")
+                    self.console.print("- Type 'exit' on an empty line to quit")
+                    self.console.print("- Type 'load' on an empty line to load a previous conversation") 
+                    self.console.print("- Enter two empty lines to send message\n")
                     
                     # Print the conversation history
                     for msg in self.conversation:
