@@ -225,25 +225,36 @@ class ClaudeTerminal:
                 break
 
             try:
-                response = self.client.messages.create(
-                    model=self.config['claude']['model'],
-                    max_tokens=self.config['claude']['max_tokens'],
-                    temperature=self.config['claude']['temperature'],
-                    system=self.config['system_prompt'],
-                    messages=[
-                        *self.conversation,
-                        {"role": "user", "content": question}
-                    ]
-                )
-
-                self.conversation.append({"role": "user", "content": question})
-                self.conversation.append({
-                    "role": "assistant",
-                    "content": response.content[0].text
-                })
-
                 self.console.print(f"\n[bold {self.config['app']['theme']['assistant_name']}]Claude")
+                
+                with self.console.status("[bold green]Waiting for Claude's response...", spinner="dots"):
+                    response = self.client.messages.create(
+                        model=self.config['claude']['model'],
+                        max_tokens=self.config['claude']['max_tokens'],
+                        temperature=self.config['claude']['temperature'],
+                        system=self.config['system_prompt'],
+                        messages=[
+                            *self.conversation,
+                            {"role": "user", "content": question}
+                        ]
+                    )
+
+                    self.conversation.append({"role": "user", "content": question})
+                    self.conversation.append({
+                        "role": "assistant",
+                        "content": response.content[0].text
+                    })
+
+                # Capture the console height before displaying response
+                start_y = self.console.cursor_position.y
+                
+                # Display response - will be scrolled to beginning automatically
                 self.parse_and_display_response(response.content[0].text)
+                
+                # Move cursor back to the start of the response area
+                self.console.show_cursor(False)
+                self.console.cursor_position = (0, start_y)
+                self.console.show_cursor(True)
 
             except Exception as e:
                 self.console.print(f"[{self.config['app']['theme']['error']}]Error getting response from Claude: {str(e)}[/]")
