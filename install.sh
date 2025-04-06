@@ -1,3 +1,6 @@
+#!/bin/bash
+
+# Check if script is run with sudo
 if [ "$EUID" -ne 0 ]; then
     echo "Please run with sudo"
     exit 1
@@ -38,6 +41,9 @@ mkdir -p "$VENV_DIR"
 mkdir -p "$VENV_DIR/bin"
 chown -R $REAL_USER:$(id -gn $REAL_USER) "$CONFIG_DIR"
 chown -R $REAL_USER:$(id -gn $REAL_USER) "$VENV_DIR"
+echo "Setting permissions for config directory..."
+chmod 755 "$CONFIG_DIR"
+chown -R $REAL_USER:$(id -gn $REAL_USER) "$CONFIG_DIR"
 
 # Create virtual environment
 echo "Creating virtual environment..."

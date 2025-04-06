@@ -7,11 +7,13 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.syntax import Syntax
+from rich.text import Text
 import pyperclip
 from dotenv import load_dotenv
 import yaml
 import sys
 import platform
+import readline
 
 # Define configuration paths
 CONFIG_DIR = os.path.expanduser("~/.config/claudius")
@@ -34,44 +36,82 @@ class ClaudeTerminal:
         self.conversation = []
         self.system_prompt = self.config['system_prompt']
 
+        # Set up readline
+        readline.parse_and_bind('set editing-mode emacs')
+        readline.parse_and_bind('"\\C-j": accept-line')
+
     def load_config(self):
         try:
-            # Create config directory if it doesn't exist
+            print(f"Debug: Starting config load process")
+            print(f"Debug: Config directory path: {CONFIG_DIR}")
+            print(f"Debug: Config file path: {CONFIG_FILE}")
+
+            # Create config directory
+            print("Debug: Creating config directory...")
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            
-            # If config doesn't exist, create default
+            print(f"Debug: Config directory exists: {os.path.exists(CONFIG_DIR)}")
+
+            # Define default config
+            default_config = {
+                "app": {
+                    "full_screen": True,
+                    "clear_on_start": True,
+                    "show_copy_prompt": False,
+                    "theme": {
+                        "user_prompt": "yellow",
+                        "assistant_name": "bold blue",
+                        "assistant_response": "green",
+                        "code_block": "blue",
+                        "error": "red",
+                        "success": "green"
+                    }
+                },
+                "claude": {
+                    "model": "claude-3-7-sonnet-latest",
+                    "max_tokens": 1024,
+                    "temperature": 0.7
+                },
+                "system_prompt": "You are a helpful programming teacher and mentor. Your responses should be:\n1. Clear and educational\n2. Include examples when relevant\n3. Explain concepts thoroughly\n4. Break down complex topics into digestible parts"
+            }
+
+            # Check if config file exists
+            print(f"Debug: Checking if config file exists: {os.path.exists(CONFIG_FILE)}")
+
             if not os.path.exists(CONFIG_FILE):
-                default_config = {
-                    "app": {
-                        "full_screen": True,
-                        "clear_on_start": True,
-                        "theme": {
-                            "user_prompt": "yellow",
-                            "assistant_name": "bold blue",
-                            "assistant_response": "green",
-                            "code_block": "blue",
-                            "error": "red",
-                            "success": "green"
-                        }
-                    },
-                    "claude": {
-                        "model": "claude-3-5-sonnet-20241022",  # Current recommended model
-                        "max_tokens": 1024,
-                        "temperature": 0.7
-                    },
-                    "system_prompt": """You are a helpful programming teacher and mentor. Your responses should be:
-                        1. Clear and educational
-                        2. Include examples when relevant
-                        3. Explain concepts thoroughly
-                        4. Break down complex topics into digestible parts"""
-                }
-                with open(CONFIG_FILE, 'w') as f:
-                    yaml.dump(default_config, f)
-            
-            with open(CONFIG_FILE, 'r') as file:
-                self.config = yaml.safe_load(file)
+                print("Debug: Config file doesn't exist, creating it...")
+                try:
+                    with open(CONFIG_FILE, 'w') as f:
+                        print("Debug: Writing default config...")
+                        yaml.dump(default_config, f, sort_keys=False, default_flow_style=False)
+                    print("Debug: Default config written")
+
+                    # Verify the file was created
+                    print(f"Debug: Verifying config file exists: {os.path.exists(CONFIG_FILE)}")
+                    if os.path.exists(CONFIG_FILE):
+                        print(f"Debug: Config file size: {os.path.getsize(CONFIG_FILE)} bytes")
+                except Exception as write_error:
+                    print(f"Debug: Error writing config file: {str(write_error)}")
+                    raise
+
+            # Try to load the config
+            print("Debug: Loading config file...")
+            try:
+                with open(CONFIG_FILE, 'r') as file:
+                    self.config = yaml.safe_load(file)
+                print("Debug: Config loaded successfully")
+            except Exception as read_error:
+                print(f"Debug: Error reading config: {str(read_error)}")
+                print("Debug: Using default config")
+                self.config = default_config
+
+            # Verify config is loaded
+            print(f"Debug: Config loaded: {'Yes' if self.config else 'No'}")
+
         except Exception as e:
-            print(f"Error loading config: {e}")
+            print(f"Debug: Fatal error in load_config: {str(e)}")
+            print("Debug: Stack trace:", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
             sys.exit(1)
 
     def setup_console(self):
@@ -86,7 +126,7 @@ class ClaudeTerminal:
         if not self.api_key:
             self.console.print("[yellow]ANTHROPIC_API_KEY not found in environment variables[/yellow]")
             self.api_key = Prompt.ask("[yellow]Please enter your Anthropic API key", password=True)
-        
+
         try:
             self.client = anthropic.Anthropic(api_key=self.api_key)
             self.console.print("[green]Successfully connected to Claude![/green]")
@@ -94,28 +134,75 @@ class ClaudeTerminal:
             self.console.print(f"[red]Error connecting to Claude: {str(e)}[/red]")
             sys.exit(1)
 
+    def get_multiline_input(self):
+        lines = []
+        self.console.print(f"\n[bold {self.config['app']['theme']['user_prompt']}]You (Press Ctrl+J to send)[/]")
+
+        while True:
+            try:
+                line = input()
+                # Check for exit command
+                if line.strip().lower() == "exit" and not lines:
+                    return "exit"
+                if line.strip() == "":  # Empty line
+                    if lines and lines[-1].strip() == "":  # Second empty line
+                        break
+                lines.append(line)
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                return "exit"
+
+        return "\n".join(lines[:-1] if lines else [])  # Remove the last empty line
+
     def copy_to_clipboard(self, text):
         pyperclip.copy(text)
         self.console.print(f"[{self.config['app']['theme']['success']}]Code copied to clipboard![/]")
 
     def display_code_block(self, code, language="python"):
-        syntax = Syntax(code, language, theme="monokai")
-        self.console.print(Panel(syntax, border_style=self.config['app']['theme']['code_block']))
-        
-        self.console.print(f"[{self.config['app']['theme']['code_block']}]Press 'c' to copy code, any other key to continue[/]")
-        if input().lower() == 'c':
-            self.copy_to_clipboard(code)
+        # Create syntax object without width parameter
+        syntax = Syntax(
+            code,
+            language,
+            theme="monokai",
+            word_wrap=True
+        )
+
+        # Wrap the syntax object in a panel that handles the width
+        self.console.print(Panel(
+            syntax,
+            border_style=self.config['app']['theme']['code_block'],
+            width=self.console.width - 2,
+            expand=True
+        ))
+
+        show_copy_prompt = self.config['app'].get('show_copy_prompt', True)
+        if show_copy_prompt:
+            self.console.print(f"[{self.config['app']['theme']['code_block']}]Press 'c' to copy code, any other key to continue[/]")
+            if input().lower() == 'c':
+                self.copy_to_clipboard(code)
+
+        show_copy_prompt = self.config['app'].get('show_copy_prompt', True)
+        if show_copy_prompt:
+            self.console.print(f"[{self.config['app']['theme']['code_block']}]Press 'c' to copy code, any other key to continue[/]")
+            if input().lower() == 'c':
+                self.copy_to_clipboard(code)
 
     def parse_and_display_response(self, response):
         parts = response.split("```")
-        
+
         for i, part in enumerate(parts):
             if i % 2 == 0:
                 if part.strip():
-                    self.console.print(Panel(
-                        part.strip(),
-                        border_style=self.config['app']['theme']['assistant_response']
-                    ))
+                    text = Text(part.strip())
+                    panel = Panel(
+                        text,
+                        border_style=self.config['app']['theme']['assistant_response'],
+                        width=self.console.width - 2,
+                        expand=True,
+                        style="white"
+                    )
+                    self.console.print(panel)
             else:
                 code_lines = part.split('\n')
                 language = code_lines[0] if code_lines[0] else "python"
@@ -125,12 +212,16 @@ class ClaudeTerminal:
 
     def start(self):
         self.console.print(f"[bold {self.config['app']['theme']['assistant_name']}]Welcome to Claude Terminal![/]")
-        self.console.print("Type 'exit' to quit\n")
+        self.console.print("Commands:")
+        self.console.print("- Type 'exit' on an empty line to quit")
+        self.console.print("- Press Ctrl+J to send message")
+        self.console.print("- Or enter two empty lines to send message\n")
 
         while True:
-            question = Prompt.ask(f"\n[bold {self.config['app']['theme']['user_prompt']}]You")
-            
-            if question.lower() == 'exit':
+            question = self.get_multiline_input()
+
+            if question.lower().strip() == 'exit':
+                self.console.print("[yellow]Goodbye![/yellow]")
                 break
 
             try:
@@ -153,7 +244,7 @@ class ClaudeTerminal:
 
                 self.console.print(f"\n[bold {self.config['app']['theme']['assistant_name']}]Claude")
                 self.parse_and_display_response(response.content[0].text)
-                
+
             except Exception as e:
                 self.console.print(f"[{self.config['app']['theme']['error']}]Error getting response from Claude: {str(e)}[/]")
 
