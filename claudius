@@ -190,9 +190,11 @@ class ClaudeTerminal:
 
     def parse_and_display_response(self, response):
         parts = response.split("```")
-
+        content_segments = []
+        
+        # First, parse all the content into segments
         for i, part in enumerate(parts):
-            if i % 2 == 0:
+            if i % 2 == 0:  # Regular text
                 if part.strip():
                     text = Text(part.strip())
                     panel = Panel(
@@ -202,13 +204,49 @@ class ClaudeTerminal:
                         expand=True,
                         style="white"
                     )
-                    self.console.print(panel)
-            else:
+                    content_segments.append(("text", panel))
+            else:  # Code block
                 code_lines = part.split('\n')
                 language = code_lines[0] if code_lines[0] else "python"
                 code = '\n'.join(code_lines[1:] if code_lines[0] else code_lines)
                 if code.strip():
-                    self.display_code_block(code, language)
+                    content_segments.append(("code", (code, language)))
+        
+        # Calculate terminal height (approximately how many lines we can show at once)
+        terminal_height = self.console.size.height
+        max_lines_per_page = terminal_height - 5  # Leave some space for prompts
+        
+        # Display content in pages
+        current_line = 0
+        for segment_type, content in content_segments:
+            if segment_type == "text":
+                panel = content
+                # Estimate panel height (this is approximate)
+                panel_text = panel.renderable
+                panel_lines = len(str(panel_text).split('\n'))
+                
+                # Check if we need to paginate
+                if current_line + panel_lines > max_lines_per_page and current_line > 0:
+                    self.console.print("\n[bold yellow]Press Enter to continue...[/]", end="")
+                    input()
+                    current_line = 0
+                
+                self.console.print(panel)
+                current_line += panel_lines
+                
+            elif segment_type == "code":
+                code, language = content
+                # Estimate code block height
+                code_lines = len(code.split('\n'))
+                
+                # Check if we need to paginate
+                if current_line + code_lines + 5 > max_lines_per_page and current_line > 0:  # +5 for code block formatting
+                    self.console.print("\n[bold yellow]Press Enter to continue...[/]", end="")
+                    input()
+                    current_line = 0
+                
+                self.display_code_block(code, language)
+                current_line += code_lines + 5  # Add some space for the code block formatting
 
     def start(self):
         self.console.print(f"[bold {self.config['app']['theme']['assistant_name']}]Welcome to Claude Terminal![/]")
@@ -245,16 +283,8 @@ class ClaudeTerminal:
                         "content": response.content[0].text
                     })
 
-                # Capture the console height before displaying response
-                start_y = self.console.cursor_position.y
-                
-                # Display response - will be scrolled to beginning automatically
+                # Display response without cursor positioning (fixed compatibility issue)
                 self.parse_and_display_response(response.content[0].text)
-                
-                # Move cursor back to the start of the response area
-                self.console.show_cursor(False)
-                self.console.cursor_position = (0, start_y)
-                self.console.show_cursor(True)
 
             except Exception as e:
                 self.console.print(f"[{self.config['app']['theme']['error']}]Error getting response from Claude: {str(e)}[/]")
